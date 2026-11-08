@@ -39,6 +39,12 @@ Use this path when AWX is already installed and reachable on a public HTTPS URL.
    On Linux/macOS use `cp` and `python3 run_setup.py`, or `./setup.sh`.
    It checks AWX is reachable, creates the credentials, project, inventory, job templates and API token in AWX, configures ServiceNow, and fires a read-only test incident.
 
+6. **Cisco sandbox over VPN.** The on-demand Catalyst 8000v sandbox sits behind a VPN (10.10.20.0/24). Fill the `SANDBOX_VPN_*` and `AWX_HOST_SSH_*` values in `.env`, then run:
+   ```powershell
+   py vpn_setup.py
+   ```
+   It launches a one-time AWX job that SSHes from the job container to its own server, installs `openconnect`, and starts a split-tunnel VPN service (only 10.10.20.0/24 uses the tunnel, so AWX and internet traffic are unaffected). It finishes by checking the router answers on port 22. Run `py run_setup.py` again afterwards so the Cisco credential has the sandbox login. A new reservation has new VPN details: update `.env` and run `py vpn_setup.py` again.
+
 ---
 
 ## Setup on a fresh EC2 instance (about 30 minutes, mostly waiting)
