@@ -33,103 +33,36 @@
         ansible_host: "{{ node_ip }}"
         ansible_connection: ssh
         ansible_user: "{{ lookup('env', 'NODE_SSH_USER') }}"
-        ansible_password: "{{ lookup('env', 'NODE_SSH_PASSWORD') }}"
-        ansible_become_password: "{{ lookup('env', 'NODE_SSH_PASSWORD') }}"
+        ansible_password: "{{ lookup('env', 'NODE_SSH_PASSWORD') or omit }}"
+        ansible_become_password: "{{ lookup('env', 'NODE_SSH_PASSWORD') or omit }}"
+        ansible_ssh_private_key_file: "{{ lookup('env', 'NODE_SSH_KEY_FILE') or omit }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        ansible_python_interpreter: /usr/bin/python3
       no_log: true
 
 - name: Connect the AWX server to the sandbox VPN (split tunnel, lab network only)
   hosts: awx-node
   become: true
   gather_facts: false
-  vars:
-    vpn_host: "{{ lookup('env', 'SANDBOX_VPN_HOST') }}"
-    vpn_user: "{{ lookup('env', 'SANDBOX_VPN_USER') }}"
-    lab_router: "{{ lookup('env', 'SANDBOX_ROUTER_IP') | default('10.10.20.48', true) }}"
   tasks:
-    - name: Install the VPN client
-      ansible.builtin.apt:
-        name: [openconnect, vpnc-scripts, netcat-openbsd]
-        update_cache: true
-        cache_valid_time: 3600
-
-    - name: Create the config folder
-      ansible.builtin.file:
-        path: /etc/openconnect
-        state: directory
+    - name: Copy the host-side VPN script
+      ansible.builtin.copy:
+        src: ../scripts/sandbox_vpn_host.sh
+        dest: /root/sandbox_vpn_host.sh
         mode: "0700"
 
-    - name: Store the VPN password (root-only)
-      ansible.builtin.copy:
-        dest: /etc/openconnect/sandbox.pass
-        content: "{{ lookup('env', 'SANDBOX_VPN_PASSWORD') }}\n"
-        mode: "0600"
-      no_log: true
+    - name: Install openconnect and start the split-tunnel VPN service
+      ansible.builtin.command: bash /root/sandbox_vpn_host.sh
+      environment:
+        VPN_HOST: "{{ lookup('env', 'SANDBOX_VPN_HOST') }}"
+        VPN_USER: "{{ lookup('env', 'SANDBOX_VPN_USER') }}"
+        VPN_PASS: "{{ lookup('env', 'SANDBOX_VPN_PASSWORD') }}"
+        ROUTER: "{{ lookup('env', 'SANDBOX_ROUTER_IP') | default('10.10.20.48', true) }}"
+      register: vpn_run
+      changed_when: true
 
-    - name: Split-tunnel script - only 10.10.20.0/24 goes through the VPN
-      ansible.builtin.copy:
-        dest: /etc/openconnect/split.sh
-        mode: "0755"
-        content: |
-          #!/bin/sh
-          # Route only the DevNet lab network through the tunnel; keep default route and DNS untouched.
-          export CISCO_SPLIT_INC=1
-          export CISCO_SPLIT_INC_0_ADDR=10.10.20.0
-          export CISCO_SPLIT_INC_0_MASK=255.255.255.0
-          export CISCO_SPLIT_INC_0_MASKLEN=24
-          export CISCO_SPLIT_INC_0_PROTOCOL=0 CISCO_SPLIT_INC_0_SPORT=0 CISCO_SPLIT_INC_0_DPORT=0
-          unset INTERNAL_IP4_DNS INTERNAL_IP6_DNS CISCO_DEF_DOMAIN CISCO_SPLIT_DNS
-          unset INTERNAL_IP6_ADDRESS INTERNAL_IP6_NETMASK CISCO_IPV6_SPLIT_INC
-          exec /usr/share/vpnc-scripts/vpnc-script "$@"
-
-    - name: Read the VPN server certificate pin (only needed if its certificate is not publicly trusted)
-      ansible.builtin.shell: >
-        openconnect --authenticate --non-inter --protocol=anyconnect
-        --user={{ vpn_user | quote }} --passwd-on-stdin {{ vpn_host | quote }}
-        < /etc/openconnect/sandbox.pass 2>&1 || true
-      register: auth_probe
-      changed_when: false
-      no_log: true
-
-    - name: Remember the pin
-      ansible.builtin.set_fact:
-        cert_pin: "{{ auth_probe.stdout | regex_search('pin-sha256:[A-Za-z0-9+/=]+') | default('', true) }}"
-        auth_failed: "{{ 'Login failed' in auth_probe.stdout or 'Failed to complete authentication' in auth_probe.stdout }}"
-
-    - name: Stop early on a wrong VPN username or password
-      ansible.builtin.fail:
-        msg: "The sandbox VPN rejected the username/password. Copy vpn_username and vpn_password again from the sandbox Access Details."
-      when: auth_failed | bool
-
-    - name: VPN as a service (reconnects automatically)
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/sandbox-vpn.service
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Cisco DevNet sandbox VPN (split tunnel 10.10.20.0/24)
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          ExecStart=/bin/sh -c 'exec /usr/sbin/openconnect --protocol=anyconnect --non-inter --user={{ vpn_user | quote }} --passwd-on-stdin --script=/etc/openconnect/split.sh {{ ('--servercert ' ~ cert_pin) if cert_pin else '' }} {{ vpn_host | quote }} < /etc/openconnect/sandbox.pass'
-          Restart=always
-          RestartSec=10
-          [Install]
-          WantedBy=multi-user.target
-
-    - name: Start the VPN
-      ansible.builtin.systemd:
-        name: sandbox-vpn
-        daemon_reload: true
-        enabled: true
-        state: restarted
-
-    - name: Wait for the lab router to answer on SSH
-      ansible.builtin.wait_for:
-        host: "{{ lab_router }}"
-        port: 22
-        timeout: 90
+    - name: Script output
+      ansible.builtin.debug:
+        var: vpn_run.stdout_lines
 
 - name: Confirm AWX jobs can reach the lab router
   hosts: localhost

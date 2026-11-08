@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from run_setup import load_env  # noqa: E402
 
-NEEDED = ["SANDBOX_VPN_HOST", "SANDBOX_VPN_USER", "SANDBOX_VPN_PASSWORD", "AWX_HOST_SSH_USER", "AWX_HOST_SSH_PASSWORD"]
+NEEDED = ["SANDBOX_VPN_HOST", "SANDBOX_VPN_USER", "SANDBOX_VPN_PASSWORD", "AWX_HOST_SSH_USER"]
 
 
 def report_failure(awx, API, job):
@@ -55,6 +55,16 @@ def main():
     missing = [k for k in NEEDED if not E.get(k)]
     if missing:
         sys.exit(".env is missing: " + ", ".join(missing))
+    key_text = ""
+    if E.get("AWX_HOST_SSH_KEY_FILE"):
+        kp = Path(E["AWX_HOST_SSH_KEY_FILE"]).expanduser()
+        if not kp.is_absolute():
+            kp = ROOT / kp
+        if not kp.exists():
+            sys.exit(f"AWX_HOST_SSH_KEY_FILE not found: {kp}")
+        key_text = kp.read_text()
+    if not key_text and not E.get("AWX_HOST_SSH_PASSWORD"):
+        sys.exit("Set AWX_HOST_SSH_KEY_FILE (path to the server's SSH private key) or AWX_HOST_SSH_PASSWORD in .env")
 
     import awx_config as A  # uses AWX_URL / AWX_ADMIN_PASSWORD from .env
     from demohttp import HttpError
@@ -62,8 +72,8 @@ def main():
 
     try:
         org_id = A.find("organizations", "Default")["id"]
-        print("  - Credential type: Sandbox VPN")
-        ctype = A.upsert("credential_types", "Sandbox VPN", {
+        print("  - Credential type: Sandbox VPN v2")
+        ctype = A.upsert("credential_types", "Sandbox VPN v2", {
             "kind": "cloud",
             "inputs": {"fields": [
                 {"id": "vpn_host", "label": "VPN address (host:port)", "type": "string"},
@@ -71,21 +81,25 @@ def main():
                 {"id": "vpn_password", "label": "VPN password", "type": "string", "secret": True},
                 {"id": "node_user", "label": "AWX server SSH user", "type": "string"},
                 {"id": "node_password", "label": "AWX server SSH password", "type": "string", "secret": True},
+                {"id": "node_key", "label": "AWX server SSH private key", "type": "string", "secret": True,
+                 "multiline": True},
                 {"id": "node_ip", "label": "AWX server IP (optional)", "type": "string"},
                 {"id": "router_ip", "label": "Lab router IP", "type": "string"},
-            ], "required": ["vpn_host", "vpn_user", "vpn_password", "node_user", "node_password"]},
-            "injectors": {"env": {
+            ], "required": ["vpn_host", "vpn_user", "vpn_password", "node_user"]},
+            "injectors": {"file": {"template.node_key": "{{ node_key }}"}, "env": {
+                "NODE_SSH_KEY_FILE": "{% if node_key %}{{ tower.filename.node_key }}{% endif %}",
                 "SANDBOX_VPN_HOST": "{{ vpn_host }}", "SANDBOX_VPN_USER": "{{ vpn_user }}",
                 "SANDBOX_VPN_PASSWORD": "{{ vpn_password }}", "NODE_SSH_USER": "{{ node_user }}",
                 "NODE_SSH_PASSWORD": "{{ node_password }}", "AWX_NODE_IP": "{{ node_ip }}",
                 "SANDBOX_ROUTER_IP": "{{ router_ip }}"}},
         })
-        print("  - Credential: Sandbox VPN")
-        cred = A.upsert("credentials", "Sandbox VPN", {
+        print("  - Credential: Sandbox VPN v2")
+        cred = A.upsert("credentials", "Sandbox VPN v2", {
             "organization": org_id, "credential_type": ctype["id"],
             "inputs": {"vpn_host": E["SANDBOX_VPN_HOST"], "vpn_user": E["SANDBOX_VPN_USER"],
                        "vpn_password": E["SANDBOX_VPN_PASSWORD"], "node_user": E["AWX_HOST_SSH_USER"],
-                       "node_password": E["AWX_HOST_SSH_PASSWORD"], "node_ip": E.get("AWX_NODE_IP", ""),
+                       "node_password": E.get("AWX_HOST_SSH_PASSWORD", ""), "node_key": key_text,
+                       "node_ip": E.get("AWX_NODE_IP", ""),
                        "router_ip": E.get("SANDBOX_ROUTER_IP") or E.get("CISCO_HOST") or "10.10.20.48"},
         })
         proj = A.find("projects", "SNOW AWX Demo")
@@ -107,6 +121,9 @@ def main():
             "playbook": "playbooks/sandbox_vpn.yml", "description": "Connects the AWX server to the DevNet sandbox VPN",
         })
         attached = {c["id"] for c in awx.get(f"{API}/job_templates/{jt['id']}/credentials/")["results"]}
+        for old_id in attached - {cred["id"]}:      # drop the earlier "Sandbox VPN" credential
+            awx.post(f"{API}/job_templates/{jt['id']}/credentials/", {"id": old_id, "disassociate": True},
+                     ok=(200, 201, 204))
         if cred["id"] not in attached:
             awx.post(f"{API}/job_templates/{jt['id']}/credentials/", {"id": cred["id"]}, ok=(200, 201, 204))
 

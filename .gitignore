@@ -2,3 +2,6 @@
 .state/
 __pycache__/
 *.pyc
+*.pem
+*.key
+id_*
