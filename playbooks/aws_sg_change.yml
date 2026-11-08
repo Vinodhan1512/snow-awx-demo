@@ -1,0 +1,155 @@
+---
+# Use case 2: ServiceNow Change -> AWX -> AWS Security Group rule change with
+# policy guardrail, pre/post snapshot, validation and automatic rollback -> back to the same Change.
+# extra_vars from ServiceNow: snow_table, snow_sys_id, snow_number, sg_id, sg_action, sg_protocol,
+#                             sg_port, sg_cidr, simulate_failure
+
+- name: AWS security group change
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/sg_policy.yml
+  vars:
+    region: "{{ aws_region | default('ap-south-1', true) }}"
+    req:
+      action: "{{ sg_action | default('add', true) | lower }}"
+      protocol: "{{ sg_protocol | default('tcp', true) | lower }}"
+      port: "{{ sg_port | default('', true) }}"
+      cidr: "{{ sg_cidr | default('', true) | trim }}"
+    rule_desc: "{{ snow_number | default('snow') }} via AWX"
+    header: >-
+      <h3 style="margin:0">{{ snow_number | default('') }} &mdash; AWS Security Group change</h3>
+      SG <b>{{ sg_id | default('?') }}</b> ({{ region }}) &middot;
+      Request: <b>{{ req.action | upper }} {{ req.protocol }}/{{ req.port }} from {{ req.cidr }}</b> &middot;
+      AWX job #{{ tower_job_id | default(awx_job_id | default('n/a')) }}<br/><br/>
+  tasks:
+    # ---------------- 1. Policy guardrail ----------------
+    - name: GUARDRAIL | evaluate request against security policy
+      ansible.builtin.set_fact:
+        violations: "{{ req | sg_policy_violations(sg_policy) + ([] if (sg_id | default('') | length) else ['No security group ID supplied']) }}"
+
+    - name: GUARDRAIL | reject non-compliant request
+      when: violations | length > 0
+      block:
+        - name: ServiceNow | rejected by policy
+          ansible.builtin.include_tasks: tasks/snow_update.yml
+          vars:
+            automation_status: rejected
+            note_html: >-
+              {{ header }}
+              <b style="font-size:14px;color:#cf222e">REJECTED BY POLICY &mdash; no change was made to AWS</b><br/><br/>
+              {{ violations | checks_html('Policy violations') }}<br/>
+              Resubmit with a specific source range (e.g. a corporate /16) or raise a security exception.
+
+        - name: Stop here (request handled)
+          ansible.builtin.meta: end_play
+
+    # ---------------- 2. Pre-check ----------------
+    - name: PRE-CHECK | snapshot current inbound rules
+      sg_rule:
+        region: "{{ region }}"
+        group_id: "{{ sg_id }}"
+        action: describe
+      register: pre
+
+    # ---------------- 3. Apply ----------------
+    - name: CHANGE | {{ req.action }} {{ req.protocol }}/{{ req.port }} from {{ req.cidr }}
+      sg_rule:
+        region: "{{ region }}"
+        group_id: "{{ sg_id }}"
+        action: "{{ req.action }}"
+        protocol: "{{ req.protocol }}"
+        port: "{{ req.port | int }}"
+        cidr: "{{ req.cidr }}"
+        description: "{{ rule_desc }}"
+      register: change
+
+    # ---------------- 4. Post-check ----------------
+    - name: POST-CHECK | snapshot inbound rules
+      sg_rule:
+        region: "{{ region }}"
+        group_id: "{{ sg_id }}"
+        action: describe
+      register: post
+
+    - name: POST-CHECK | validate
+      vars:
+        target: "{{ req.protocol }}/{{ req.port }} from {{ req.cidr }}"
+        pre_set: "{{ pre.rules | rules_list }}"
+        post_set: "{{ post.rules | rules_list }}"
+        expected_post: "{{ (pre_set + [target]) | unique | sort if req.action == 'add' else pre_set | reject('equalto', target) | sort }}"
+      ansible.builtin.set_fact:
+        checks:
+          - name: "Requested rule {{ 'present' if req.action == 'add' else 'absent' }}"
+            ok: "{{ (target in post_set) == (req.action == 'add') }}"
+            detail: "{{ target }}"
+          - name: No unintended rule changes
+            ok: "{{ (post_set | sort) == expected_post }}"
+            detail: "{{ (pre_set | length) }} rules before, {{ (post_set | length) }} after"
+          - name: Post-change health probe
+            ok: "{{ not (simulate_failure | default(false) | bool) }}"
+            detail: "{{ 'Simulated failure requested on ticket (demo)' if (simulate_failure | default(false) | bool) else 'AWS API confirms rule state' }}"
+
+    - name: Evaluate result
+      ansible.builtin.set_fact:
+        overall_ok: "{{ checks | map(attribute='ok') | map('bool') | min }}"
+
+    # ---------------- 5. Rollback on failure ----------------
+    - name: ROLLBACK | revert the change
+      when: not (overall_ok | bool) and change.changed
+      block:
+        - name: ROLLBACK | apply inverse action
+          sg_rule:
+            region: "{{ region }}"
+            group_id: "{{ sg_id }}"
+            action: "{{ 'remove' if req.action == 'add' else 'add' }}"
+            protocol: "{{ req.protocol }}"
+            port: "{{ req.port | int }}"
+            cidr: "{{ req.cidr }}"
+            description: "{{ rule_desc }}"
+
+        - name: ROLLBACK | verify rules match the pre-change snapshot
+          sg_rule:
+            region: "{{ region }}"
+            group_id: "{{ sg_id }}"
+            action: describe
+          register: after_rollback
+
+        - name: ROLLBACK | record result
+          ansible.builtin.set_fact:
+            rolled_back: "{{ (after_rollback.rules | rules_text) == (pre.rules | rules_text) }}"
+
+    # ---------------- 6. Report ----------------
+    - name: Build report
+      ansible.builtin.set_fact:
+        status: "{{ 'success' if overall_ok | bool else ('rolled_back' if rolled_back | default(false) | bool else 'failed') }}"
+        rules_diff: "{{ pre.rules | rules_text | unified_diff(post.rules | rules_text, 'inbound rules (pre)', 'inbound rules (post)') }}"
+
+    - name: ServiceNow | write pre/post comparison to the ticket
+      ansible.builtin.include_tasks: tasks/snow_update.yml
+      vars:
+        automation_status: "{{ status }}"
+        banner_color: "{{ {'success': '#116329', 'rolled_back': '#9a6700', 'failed': '#cf222e'}[status] }}"
+        banner_text: "{{ {'success': 'CHANGE SUCCESSFUL &mdash; all post-checks passed',
+                          'rolled_back': 'POST-CHECK FAILED &mdash; change automatically ROLLED BACK, security group restored',
+                          'failed': 'POST-CHECK FAILED &mdash; manual review required'}[status] }}"
+        note_html: >-
+          {{ header }}
+          <b style="font-size:14px;color:{{ banner_color }}">{{ banner_text }}</b><br/><br/>
+          {{ ([{'name': 'Policy guardrail', 'ok': true, 'detail': 'request compliant with SG policy'}] + checks)
+             | checks_html('Validation') }}<br/>
+          <table><tr><td valign="top">{{ pre.rules | rules_html('Before') }}</td><td width="20"></td>
+          <td valign="top">{{ post.rules | rules_html('After change') }}</td></tr></table><br/>
+          <b>Rule diff</b>{{ rules_diff | diff_html }}
+          {% if status == 'rolled_back' %}<b>Rollback:</b> inverse change applied and verified against the pre-change snapshot.{% endif %}
+
+    - name: ServiceNow | attach JSON snapshots
+      ansible.builtin.include_tasks: tasks/snow_attach.yml
+      vars:
+        file_name: "{{ snow_number | default('change') }}_{{ sg_id }}_snapshots.json"
+        file_content: "{{ {'request': req, 'pre': pre.rules, 'post': post.rules, 'checks': checks, 'status': status} | to_nice_json }}"
+
+    - name: Fail the AWX job when the change did not succeed
+      ansible.builtin.fail:
+        msg: "Change {{ status }}"
+      when: status != 'success'

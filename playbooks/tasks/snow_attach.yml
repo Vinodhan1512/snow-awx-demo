@@ -1,0 +1,19 @@
+---
+# Attaches a text file to the ServiceNow record. Inputs: snow_table, snow_sys_id, file_name, file_content
+- name: "ServiceNow | attach {{ file_name }}"
+  ansible.builtin.uri:
+    url: "https://{{ lookup('env', 'SN_INSTANCE') }}/api/now/attachment/file?table_name={{ snow_table }}&table_sys_id={{ snow_sys_id }}&file_name={{ file_name | urlencode }}"
+    method: POST
+    user: "{{ lookup('env', 'SN_USERNAME') }}"
+    password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    force_basic_auth: true
+    headers:
+      Content-Type: text/plain
+    body: "{{ file_content }}"
+    body_format: raw
+    status_code: 201
+    timeout: 60
+  register: snow_att
+  retries: 3
+  delay: 5
+  until: snow_att is succeeded

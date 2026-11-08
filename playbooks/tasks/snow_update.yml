@@ -1,0 +1,21 @@
+---
+# Writes a work note (HTML) and status back to the originating ServiceNow record.
+# Inputs: snow_table, snow_sys_id, note_html, automation_status
+- name: "ServiceNow | update {{ snow_number | default(snow_sys_id) }} -> {{ automation_status }}"
+  ansible.builtin.uri:
+    url: "https://{{ lookup('env', 'SN_INSTANCE') }}/api/now/table/{{ snow_table }}/{{ snow_sys_id }}"
+    method: PATCH
+    user: "{{ lookup('env', 'SN_USERNAME') }}"
+    password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      work_notes: "[code]{{ note_html }}[/code]"
+      u_automation_status: "{{ automation_status }}"
+    status_code: 200
+    timeout: 60
+  register: snow_patch
+  retries: 3
+  delay: 5
+  until: snow_patch is succeeded
+  no_log: false

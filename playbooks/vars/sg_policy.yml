@@ -1,0 +1,8 @@
+---
+# Guardrails evaluated BEFORE any security-group change is made.
+sg_policy:
+  allowed_protocols: [tcp, udp]
+  sensitive_ports: [22, 23, 3389, 1433, 3306, 5432, 6379, 9200, 27017]
+  allow_world_open: false        # 0.0.0.0/0 or ::/0 is rejected for every port
+  min_prefix_v4: 8               # nothing broader than /8
+  min_prefix_v6: 32

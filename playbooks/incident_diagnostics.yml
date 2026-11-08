@@ -1,0 +1,80 @@
+---
+# Use case 3: ServiceNow Incident -> AWX -> read-only Cisco diagnostics -> findings back on the same Incident.
+# extra_vars from ServiceNow: snow_table, snow_sys_id, snow_number, target_device, interface
+
+- name: Incident diagnostics | collect from device (read-only)
+  hosts: "{{ target_device | default('demo-iosxe', true) }}"
+  gather_facts: false
+  vars:
+    intf: "{{ interface | default('GigabitEthernet1', true) }}"
+    diag_commands:
+      - "show interfaces {{ intf }}"
+      - show ip interface brief
+      - "show logging | include {{ intf }}"
+      - show cdp neighbors
+      - show version | include uptime|Version
+  tasks:
+    - name: Run diagnostic commands (each tolerated individually)
+      cisco.ios.ios_command:
+        commands: "{{ item }}"
+      loop: "{{ diag_commands }}"
+      register: diag
+      ignore_errors: true
+
+    - name: Keep results for the report
+      ansible.builtin.set_fact:
+        diag_results: "{{ diag.results | diag_pairs }}"
+
+- name: Incident diagnostics | analyse and update the incident
+  hosts: localhost
+  gather_facts: false
+  vars:
+    dev: "{{ target_device | default('demo-iosxe', true) }}"
+    intf: "{{ interface | default('GigabitEthernet1', true) }}"
+    h: "{{ hostvars[dev] if dev in hostvars else {} }}"
+    results: "{{ h.diag_results | default([]) }}"
+  tasks:
+    - name: Device unreachable
+      when: results | length == 0
+      block:
+        - name: ServiceNow | report unreachable device
+          ansible.builtin.include_tasks: tasks/snow_update.yml
+          vars:
+            automation_status: failed
+            note_html: >-
+              <h3 style="margin:0">{{ snow_number | default('') }} &mdash; Auto-diagnostics</h3>
+              <b style="color:#cf222e">Device {{ dev }} could not be reached from AWX.</b>
+              Possible device or path outage &mdash; escalate to network on-call.
+
+        - name: Fail the job
+          ansible.builtin.fail:
+            msg: "{{ dev }} unreachable"
+
+    - name: Analyse interface state
+      ansible.builtin.set_fact:
+        analysis: "{{ (results | selectattr('cmd', 'equalto', 'show interfaces ' ~ intf) | map(attribute='out') | first | default('')) | intf_findings(intf) }}"
+
+    - name: ServiceNow | post findings
+      ansible.builtin.include_tasks: tasks/snow_update.yml
+      vars:
+        automation_status: diagnosed
+        sev_color: {high: '#cf222e', medium: '#9a6700', info: '#0969da'}
+        note_html: >-
+          <h3 style="margin:0">{{ snow_number | default('') }} &mdash; Automated diagnostics</h3>
+          Device <b>{{ dev }}</b> &middot; Interface <b>{{ intf }}</b> &middot; State <b>{{ analysis[1] }}</b> &middot;
+          AWX job #{{ tower_job_id | default(awx_job_id | default('n/a')) }}<br/><br/>
+          <b>Findings</b><ul>
+          {% for f in analysis[0] %}<li><b style="color:{{ sev_color[f.severity] }}">{{ f.severity | upper }}</b> {{ f.text | e }}</li>{% endfor %}
+          </ul>
+          {% for r in results %}<b>{{ r.cmd | e }}</b><pre style="font-size:11px">{{ (r.out | string)[:1500] | e }}</pre>{% endfor %}
+
+    - name: ServiceNow | attach raw outputs
+      ansible.builtin.include_tasks: tasks/snow_attach.yml
+      vars:
+        file_name: "{{ snow_number | default('incident') }}_{{ dev }}_diagnostics.txt"
+        file_content: |
+          {% for r in results %}
+          ##### {{ r.cmd }}
+          {{ r.out }}
+
+          {% endfor %}
