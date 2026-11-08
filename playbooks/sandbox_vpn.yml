@@ -6,12 +6,22 @@
 
 - name: Locate the AWX server from inside the job container
   hosts: localhost
-  gather_facts: true
-  gather_subset: [network]
+  gather_facts: false
   tasks:
+    - name: Read the container routing table
+      ansible.builtin.slurp:
+        src: /proc/net/route
+      register: route_table
+      when: not lookup('env', 'AWX_NODE_IP')
+
     - name: Pick the server address (container default gateway unless AWX_NODE_IP is set)
       ansible.builtin.set_fact:
-        node_ip: "{{ lookup('env', 'AWX_NODE_IP') or ansible_default_ipv4.gateway }}"
+        node_ip: "{{ lookup('env', 'AWX_NODE_IP') or (route_table.content | b64decode | default_gateway) }}"
+
+    - name: Make sure an address was found
+      ansible.builtin.assert:
+        that: node_ip | length > 0
+        fail_msg: "Could not find the AWX server address. Set AWX_NODE_IP in .env (the server's private IP) and run vpn_setup.py again."
 
     - name: Show where we will connect
       ansible.builtin.debug:

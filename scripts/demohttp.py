@@ -26,11 +26,14 @@ class Client:
             self.headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
         self.ctx = ssl.create_default_context() if verify else ssl._create_unverified_context()
 
-    def request(self, method, path, data=None, params=None, raw=None, content_type=None, ok=(200, 201, 202, 204)):
+    def request(self, method, path, data=None, params=None, raw=None, content_type=None, ok=(200, 201, 202, 204),
+                accept=None):
         url = path if path.startswith("http") else f"{self.base}{path}"
         if params:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
         headers = dict(self.headers)
+        if accept:
+            headers["Accept"] = accept
         body = None
         if raw is not None:
             body = raw if isinstance(raw, bytes) else raw.encode()

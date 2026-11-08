@@ -159,6 +159,16 @@ def diag_pairs(results):
     return pairs
 
 
+def default_gateway(route_text):
+    """Default gateway from /proc/net/route (little-endian hex), e.g. '0100A80A' -> '10.168.0.1'."""
+    for line in (route_text or "").splitlines()[1:]:
+        f = line.split()
+        if len(f) > 2 and f[1] == "00000000" and f[2] != "00000000":
+            h = f[2]
+            return ".".join(str(int(h[i:i + 2], 16)) for i in (6, 4, 2, 0))
+    return ""
+
+
 class FilterModule:
     def filters(self):
         return {
@@ -166,4 +176,5 @@ class FilterModule:
             "rules_html": rules_html, "rules_text": rules_text, "rules_list": rules_list, "intf_line": intf_line,
             "other_intfs": other_intfs, "sg_policy_violations": sg_policy_violations,
             "intf_findings": intf_findings, "diag_pairs": diag_pairs,
+            "default_gateway": default_gateway,
         }

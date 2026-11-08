@@ -23,6 +23,32 @@ from run_setup import load_env  # noqa: E402
 NEEDED = ["SANDBOX_VPN_HOST", "SANDBOX_VPN_USER", "SANDBOX_VPN_PASSWORD", "AWX_HOST_SSH_USER", "AWX_HOST_SSH_PASSWORD"]
 
 
+def report_failure(awx, API, job):
+    """Print why an AWX job failed: explanation, failed tasks with their messages, last output lines."""
+    j = awx.get(f"{API}/jobs/{job}/")
+    if j.get("job_explanation"):
+        print(f"\nJob explanation: {j['job_explanation']}")
+    if j.get("result_traceback"):
+        print("Traceback (last lines):\n" + "\n".join(j["result_traceback"].strip().splitlines()[-8:]))
+    try:
+        ev = awx.get(f"{API}/jobs/{job}/job_events/", params={"failed": "true", "page_size": 20})
+        for e in ev.get("results", []):
+            res = (e.get("event_data") or {}).get("res") or {}
+            msg = res.get("msg") or res.get("stderr") or res.get("module_stderr") or res.get("stdout") or ""
+            if e.get("event") in ("runner_on_failed", "runner_on_unreachable") or msg:
+                print(f"\nFAILED task: {e.get('task') or e.get('event_display')}  host: {e.get('host_name')}")
+                print("  " + str(msg).strip()[:1500].replace("\n", "\n  "))
+    except Exception as ex:  # noqa: BLE001
+        print(f"(could not read job events: {ex})")
+    try:
+        out = awx.get(f"{API}/jobs/{job}/stdout/", params={"format": "txt"}, accept="text/plain").get("_raw", "")
+        lines = [l for l in out.strip().splitlines() if "DEPRECATION" not in l]
+        print("\n--- last lines of the job output ---")
+        print("\n".join(lines[-25:]))
+    except Exception as ex:  # noqa: BLE001
+        print(f"(could not read job output: {ex})")
+
+
 def main():
     load_env()
     E = os.environ
@@ -99,9 +125,7 @@ def main():
             print("\nVPN is up. Set CISCO_HOST=10.10.20.48, CISCO_USERNAME=developer, CISCO_PASSWORD=<sandbox password>"
                   " in .env and run 'py run_setup.py' again to update the Cisco credential.")
         else:
-            out = awx.get(f"{API}/jobs/{job}/stdout/", params={"format": "txt"}).get("_raw", "")
-            print("\n--- last lines of the job output ---")
-            print("\n".join(out.strip().splitlines()[-25:]))
+            report_failure(awx, API, job)
             sys.exit("\nVPN setup did not finish. Paste the lines above to get the fix.")
     except HttpError as e:
         sys.exit(f"AWX API error: {e}")
