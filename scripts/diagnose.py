@@ -59,8 +59,15 @@ else:
 
 # ---- 2. business rules ----
 head("Business Rules")
-for b in q("sys_script", "nameSTARTSWITHAWX Demo", "name,collection,active,when,action_insert"):
+rules = sn.get(f"{T}/sys_script", params={"sysparm_query": "nameSTARTSWITHAWX Demo",
+              "sysparm_fields": "sys_id,name,collection,active,when,action_insert,advanced,order,condition,"
+                                "filter_condition,script,sys_updated_on", "sysparm_limit": 10})["result"]
+if not rules:
+    print("(none found)")
+for b in rules:
+    script = b.pop("script", "") or ""
     print(json.dumps(b))
+    print(f"    script length: {len(script)} chars | starts: {script[:70]!r}")
 
 # ---- 3. properties ----
 head("System properties")
