@@ -122,7 +122,7 @@ Description=Cisco DevNet sandbox VPN (split tunnel 10.10.20.0/24)
 After=network-online.target
 Wants=network-online.target
 [Service]
-ExecStart=/bin/sh -c 'exec $OC --protocol=anyconnect --non-inter --user="\$(cat /etc/openconnect/user)" --passwd-on-stdin --script=/etc/openconnect/split.sh ${PIN:+--servercert $PIN} "\$(cat /etc/openconnect/host)" < /etc/openconnect/sandbox.pass'
+ExecStart=/bin/sh -c 'exec $OC --protocol=anyconnect --non-inter --user="\$\$(cat /etc/openconnect/user)" --passwd-on-stdin --script=/etc/openconnect/split.sh ${PIN:+--servercert $PIN} "\$\$(cat /etc/openconnect/host)" < /etc/openconnect/sandbox.pass'
 Restart=always
 RestartSec=10
 [Install]
