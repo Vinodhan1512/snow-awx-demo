@@ -118,6 +118,26 @@ python3 scripts/create_ticket.py diag
 
 ---
 
+## Bulk changes and automatic closing
+
+**Several interfaces in one change:** put a range or a list in *Interface*, e.g. `Loopback200-209` or
+`Lo200,Lo201,Lo305` (max 20). Every interface is checked against the guardrails, configured and validated; the
+report has one row per interface. If any one is protected (GigabitEthernet1) the whole change is refused.
+`py scripts/create_ticket.py cisco --interface Loopback200-209`
+
+**Tickets close themselves** once AWX writes the final result (Business Rules *AWX Demo - close*):
+
+| Result | Change request | Incident |
+|---|---|---|
+| Success / Diagnosed | Closed – Successful | Resolved – Fixed Without Action |
+| Rolled back | Closed – Unsuccessful | |
+| Rejected by policy | Canceled | |
+| Diagnosed – action required (high-severity finding) | | In Progress, left for an engineer |
+| Failed | stays open | stays open |
+
+Demo shortcut: the change is closed with the state engine bypassed, because a Normal change cannot go from New to
+Closed. In production the automation runs in the *Implement* state after CAB approval and closes through *Review*.
+
 ## Virtual Agent (chat) front end
 
 The same two use cases from a chat window: the bot asks a few questions, creates the incident or change, and the
@@ -133,9 +153,11 @@ usual Business Rule → AWX → write-back chain runs. `run_setup.py` installs t
 Each returns `{ok, message, number, link, awx_job, status}`; `message` is ready to show in the chat. Input is
 validated: `gi1` → `GigabitEthernet1`, `lo200` → `Loopback200`, anything else is refused before a ticket exists.
 
-The topics are built once in **Virtual Agent Designer** (*All → Virtual Agent → Designer*). In each Script Action,
-first create the script variables `reply` and `link` (*Variables → Script variables*), and after it add a
-*Bot response → Text* node with the script `(function execute() { return vaVars.reply; })()`.
+`run_setup.py` also creates the three topics below (`scripts/va_topics.py`) as **AWX Demo - Diagnose interface**,
+**AWX Demo - Change loopback** and **AWX Demo - Automation status**. This needs the plugin **Glide Virtual Agent**
+(`com.glide.cs.chatbot`) and the role `virtual_agent_admin` for the setup user; without them setup skips the topics.
+ServiceNow compiles a topic only when it is published, so open each one once in **Virtual Agent Designer**
+(*All → Virtual Agent → Designer*) and click **Publish**. What each topic does, for reference or to rebuild by hand:
 
 **Topic "Diagnose a network interface"**: Text input `interface_name` ("Which interface is down? e.g. GigabitEthernet1"), then:
 ```js
