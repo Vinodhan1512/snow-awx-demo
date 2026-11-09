@@ -1,4 +1,4 @@
-(function executeRule(current, previous /*null when async*/) {
+(function executeRule(current, previous) {
     // Launches the AWX job template mapped to u_automation_type, passing ticket fields as extra_vars.
     // The playbook writes results back to this same record (work notes, status, attachments).
     var table = current.getTableName();

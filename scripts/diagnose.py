@@ -59,7 +59,7 @@ else:
 
 # ---- 2. business rules ----
 head("Business Rules")
-for b in q("sys_script", "nameSTARTSWITHAWX Demo", "name,collection,active,when,action_insert,condition,sys_scope"):
+for b in q("sys_script", "nameSTARTSWITHAWX Demo", "name,collection,active,when,action_insert"):
     print(json.dumps(b))
 
 # ---- 3. properties ----

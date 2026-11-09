@@ -155,11 +155,19 @@ def main():
            {"name": "glide.ui.security.allow_codetag", "value": "true", "type": "true|false"})
 
     script = (ROOT / "snow" / "business_rule.js").read_text()
+    # Remove earlier copies (older versions used names longer than the 40-char limit, which created duplicates)
+    old_rules = sn.get(f"{T}/sys_script", params={"sysparm_query": "nameSTARTSWITHAWX Demo",
+                                                    "sysparm_fields": "sys_id,name", "sysparm_limit": 50})["result"]
+    for r in old_rules:
+        sn.request("DELETE", f"{T}/sys_script/{r['sys_id']}", ok=(200, 204))
+    if old_rules:
+        log(f"Removed {len(old_rules)} earlier AWX Demo business rule(s)")
     for table in FIELDS:
-        name = f"AWX Demo - launch automation ({table})"
+        name = f"AWX Demo - launch ({table})"          # stays under the 40-character name limit
         log(f"Business Rule: {name}")
         upsert("sys_script", f"name={name}", {
-            "name": name, "collection": table, "when": "async", "action_insert": "true",
+            # 'after' (not async): runs right after the insert, so it does not depend on the async job queue
+            "name": name, "collection": table, "when": "after", "action_insert": "true",
             "action_update": "false", "active": "true", "advanced": "true", "order": "100",
             "condition": "!current.u_automation_type.nil()", "script": script,
             "description": "Launches the mapped AWX job template with ticket fields as extra_vars.",
