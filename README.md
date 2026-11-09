@@ -118,6 +118,51 @@ python3 scripts/create_ticket.py diag
 
 ---
 
+## Virtual Agent (chat) front end
+
+The same two use cases from a chat window: the bot asks a few questions, creates the incident or change, and the
+usual Business Rule → AWX → write-back chain runs. `run_setup.py` installs the backend, Script Include
+**`AWXDemoAgent`** (`snow/agent_script_include.js`):
+
+| Method | Does |
+|---|---|
+| `createDiagnosticsIncident(device, intf)` | Creates an incident with Automation Type *Network - Auto diagnostics* |
+| `createInterfaceChange(device, intf, description, shutdown)` | Creates a Normal change with *Cisco - Interface change* (loopbacks only) |
+| `getStatus(number)` | Automation status plus the latest work note as plain text |
+
+Each returns `{ok, message, number, link, awx_job, status}`; `message` is ready to show in the chat. Input is
+validated: `gi1` → `GigabitEthernet1`, `lo200` → `Loopback200`, anything else is refused before a ticket exists.
+
+The topics are built once in **Virtual Agent Designer** (*All → Virtual Agent → Designer*). In each Script Action,
+first create the script variables `reply` and `link` (*Variables → Script variables*), and after it add a
+*Bot response → Text* node with the script `(function execute() { return vaVars.reply; })()`.
+
+**Topic "Diagnose a network interface"**: Text input `interface_name` ("Which interface is down? e.g. GigabitEthernet1"), then:
+```js
+(function execute() {
+    var r = new AWXDemoAgent().createDiagnosticsIncident('demo-iosxe', vaInputs.interface_name.getValue());
+    vaVars.reply = r.message;
+    vaVars.link = r.link || '';
+})()
+```
+**Topic "Change a loopback interface"**: Text input `loopback` ("Which loopback? e.g. Loopback200"), Static choice
+`action` (Enable = `enable`, Shut down = `shutdown`), Text input `int_desc`, Boolean `confirm`; only if confirmed:
+```js
+(function execute() {
+    var r = new AWXDemoAgent().createInterfaceChange('demo-iosxe', vaInputs.loopback.getValue(),
+        vaInputs.int_desc.getValue(), vaInputs.action.getValue() == 'shutdown');
+    vaVars.reply = r.message;
+    vaVars.link = r.link || '';
+})()
+```
+**Topic "Check automation status"**: Text input `ticket` ("Ticket number?"), then:
+```js
+(function execute() {
+    vaVars.reply = new AWXDemoAgent().getStatus(vaInputs.ticket.getValue()).message;
+})()
+```
+Publish the topics and chat at `https://<instance>/sn_va_web_client_app_embed.do`, or use *Test* in the Designer.
+
 ## Troubleshooting
 
 | Symptom | Fix |

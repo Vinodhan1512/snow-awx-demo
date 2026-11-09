@@ -133,14 +133,14 @@ RHINO_RESERVED = ("abstract boolean byte char class const debugger double enum e
                   "super synchronized throws transient volatile").split()
 
 
-def check_rhino_safe(script):
+def check_rhino_safe(script, label="snow/business_rule.js"):
     import re
     code = re.sub(r"//[^\n]*|/\*.*?\*/", "", script, flags=re.S)       # ignore comments
     code = re.sub(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"", "''", code)  # ignore string literals
     bad = sorted({m.group(1) for w in RHINO_RESERVED
                   for m in re.finditer(rf"(?:[{{,]\s*|\.)({w})\b(?=\s*[:(=;.\s])", code)})
     if bad:
-        raise SystemExit(f"snow/business_rule.js uses reserved word(s) {bad} as unquoted property names. "
+        raise SystemExit(f"{label} uses reserved word(s) {bad} as unquoted property names. "
                          f"ServiceNow would silently skip the rule - quote them, e.g. obj['{bad[0]}'].")
 
 
@@ -174,7 +174,7 @@ def main():
            {"name": "glide.ui.security.allow_codetag", "value": "true", "type": "true|false"})
 
     script = (ROOT / "snow" / "business_rule.js").read_text(encoding="utf-8")
-    check_rhino_safe(script)
+    check_rhino_safe(script, "snow/business_rule.js")
     # Remove earlier copies (older versions used names longer than the 40-char limit, which created duplicates)
     old_rules = sn.get(f"{T}/sys_script", params={"sysparm_query": "nameSTARTSWITHAWX Demo",
                                                     "sysparm_fields": "sys_id,name", "sysparm_limit": 50})["result"]
@@ -192,6 +192,15 @@ def main():
             "condition": "!current.u_automation_type.nil()", "script": script,
             "description": "Launches the mapped AWX job template with ticket fields as extra_vars.",
         })
+    # Backend for the Virtual Agent topics (see README > "Virtual Agent")
+    agent = (ROOT / "snow" / "agent_script_include.js").read_text(encoding="utf-8")
+    check_rhino_safe(agent, "snow/agent_script_include.js")
+    log("Script Include: AWXDemoAgent")
+    upsert("sys_script_include", "name=AWXDemoAgent", {
+        "name": "AWXDemoAgent", "api_name": "global.AWXDemoAgent", "active": "true", "access": "package_private",
+        "client_callable": "false", "script": agent,
+        "description": "Virtual Agent backend: creates demo incidents/changes (which launch AWX) and reads their status.",
+    })
     log("ServiceNow configured")
 
 
