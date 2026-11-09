@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Configure the ServiceNow PDI via Table API:
-custom fields (+ choices, + form layout), system properties, async Business Rules.
+custom fields (+ choices, + form layout), system properties, after-insert Business Rules.
 Idempotent. Usage:
     snow_config.py                 full setup
     snow_config.py --url-only      only refresh the AWX URL property (after the tunnel URL changes)
@@ -125,6 +125,25 @@ def set_prop(name, value, desc):
            {"name": name, "value": value, "type": "string", "description": desc})
 
 
+# ES3 reserved words that ServiceNow's Rhino engine rejects as unquoted object keys / property names in
+# global-scope scripts. A script that uses one fails to compile and ServiceNow skips the Business Rule
+# silently (nothing in syslog), which is exactly why the launch rule never fired.
+RHINO_RESERVED = ("abstract boolean byte char class const debugger double enum export extends final float goto "
+                  "implements import int interface long native package private protected public short static "
+                  "super synchronized throws transient volatile").split()
+
+
+def check_rhino_safe(script):
+    import re
+    code = re.sub(r"//[^\n]*|/\*.*?\*/", "", script, flags=re.S)       # ignore comments
+    code = re.sub(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"", "''", code)  # ignore string literals
+    bad = sorted({m.group(1) for w in RHINO_RESERVED
+                  for m in re.finditer(rf"(?:[{{,]\s*|\.)({w})\b(?=\s*[:(=;.\s])", code)})
+    if bad:
+        raise SystemExit(f"snow/business_rule.js uses reserved word(s) {bad} as unquoted property names. "
+                         f"ServiceNow would silently skip the rule - quote them, e.g. obj['{bad[0]}'].")
+
+
 def awx_url():
     url = E.get("AWX_PUBLIC_URL")
     if not url:
@@ -154,7 +173,8 @@ def main():
     upsert("sys_properties", "name=glide.ui.security.allow_codetag",
            {"name": "glide.ui.security.allow_codetag", "value": "true", "type": "true|false"})
 
-    script = (ROOT / "snow" / "business_rule.js").read_text()
+    script = (ROOT / "snow" / "business_rule.js").read_text(encoding="utf-8")
+    check_rhino_safe(script)
     # Remove earlier copies (older versions used names longer than the 40-char limit, which created duplicates)
     old_rules = sn.get(f"{T}/sys_script", params={"sysparm_query": "nameSTARTSWITHAWX Demo",
                                                     "sysparm_fields": "sys_id,name", "sysparm_limit": 50})["result"]

@@ -9,7 +9,7 @@ Three use cases. Each one **starts from a ServiceNow ticket and ends in the same
 | 3 | Incident | Network - Auto diagnostics | Read-only show commands → rule-based findings | Diagnosed, findings + raw outputs on the incident |
 
 ```
-ServiceNow ticket ──(async Business Rule, REST)──▶ AWX job template ──▶ Cisco IOS-XE / AWS EC2 API
+ServiceNow ticket ──(after-insert Business Rule, REST)──▶ AWX job template ──▶ Cisco IOS-XE / AWS EC2 API
         ▲                                                │
         └──────── work notes + status + attachment ◀─────┘  (Table API + Attachment API)
 ```
@@ -123,7 +123,7 @@ python3 scripts/create_ticket.py diag
 | Symptom | Fix |
 |---|---|
 | Ticket shows *AWX launch failed: HTTP 0 / 502* | Tunnel URL changed → `./setup.sh refresh-url` |
-| Status stays empty | Business Rule did not fire: check *System Definition → Business Rules → "AWX Demo"* is active and Automation Type is set |
+| Status stays empty | Business Rule did not fire. Run `py scripts/diagnose.py`. If there is no `[AWX Demo] rule started` line, the script did not compile: ServiceNow skips a rule whose script has a syntax error **without logging anything**. A common cause is a JS reserved word such as `interface` used as an unquoted object key; quote it (`'interface': ...`). `snow_config.py` now refuses to push such a script. Also check that the rule is active and Automation Type holds a valid choice value (ServiceNow blanks invalid values) |
 | Fields not on the form | *Configure → Form Layout* and add the `u_` fields (the API layout step is best-effort) |
 | Work notes show raw `<b>` tags | Set system property `glide.ui.security.allow_codetag` = true |
 | Cisco job: authentication failed | Sandbox reservation expired → re-launch, update `.env`, `./setup.sh reconfigure` |

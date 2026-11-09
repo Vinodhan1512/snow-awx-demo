@@ -28,14 +28,17 @@
             return;
         }
 
+        // NOTE: 'interface' MUST stay quoted. It is a reserved word in ServiceNow's Rhino engine
+        // (global scope, ES5 compatibility mode): an unquoted `interface:` key is a compile error,
+        // and ServiceNow then silently skips the whole rule - no log line, no error in syslog.
         var vars = {
-            snow_table: table,
-            snow_sys_id: sysId,
-            snow_number: str('number'),
-            automation_type: type,
-            requested_by: current.getDisplayValue('opened_by'),
-            target_device: str('u_device'),
-            interface: str('u_interface')
+            'snow_table': table,
+            'snow_sys_id': sysId,
+            'snow_number': str('number'),
+            'automation_type': type,
+            'requested_by': current.getDisplayValue('opened_by'),
+            'target_device': str('u_device'),
+            'interface': str('u_interface')
         };
         if (table == 'change_request') {
             vars.int_description = str('u_int_description');
