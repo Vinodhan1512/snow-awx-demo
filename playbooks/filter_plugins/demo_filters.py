@@ -75,14 +75,58 @@ def intf_line(ip_int_brief, intf):
 
 
 def other_intfs(ip_int_brief, intf):
-    """'show ip interface brief' without the header and the target interface (blast-radius check)."""
+    """'show ip interface brief' without the header and the target interface(s) (blast-radius check).
+    intf can be one name or a list of names."""
+    targets = {i.lower() for i in ([intf] if isinstance(intf, str) else intf)}
     keep = []
     for line in (ip_int_brief or "").splitlines():
         parts = line.split()
-        if not parts or parts[0] == "Interface" or parts[0].lower() == intf.lower():
+        if not parts or parts[0] == "Interface" or parts[0].lower() in targets:
             continue
         keep.append(" ".join(parts))
     return "\n".join(keep)
+
+
+_INTF_PREFIX = {"lo": "Loopback", "loopback": "Loopback", "gi": "GigabitEthernet", "gigabitethernet": "GigabitEthernet"}
+
+
+def expand_interfaces(spec, max_count=20):
+    """'Loopback200-209', 'Lo200,Lo201', 'Loopback200-202, Loopback300' -> ['Loopback200', ...].
+    Raises on anything it does not understand or on more than max_count interfaces."""
+    out = []
+    for part in [p.strip() for p in str(spec or "").split(",") if p.strip()]:
+        m = re.fullmatch(r"(?i)([a-z]+)\s*(\d+(?:/\d+){0,2})(?:\s*-\s*(?:[a-z]+)?\s*(\d+))?", part)
+        if not m or m.group(1).lower() not in _INTF_PREFIX:
+            raise ValueError(f"Interface '{part}' not understood - use e.g. Loopback200 or Loopback200-209")
+        name, num, end = _INTF_PREFIX[m.group(1).lower()], m.group(2), m.group(3)
+        if end is None:
+            out.append(f"{name}{num}")
+            continue
+        if "/" in num or int(end) < int(num):
+            raise ValueError(f"Range '{part}' is not valid - use e.g. Loopback200-209")
+        out.extend(f"{name}{n}" for n in range(int(num), int(end) + 1))
+    out = list(dict.fromkeys(out))  # de-duplicate, keep order
+    if not out:
+        raise ValueError("No interface given")
+    if len(out) > int(max_count):
+        raise ValueError(f"{len(out)} interfaces requested - at most {max_count} per change")
+    return out
+
+
+def interface_checks(intfs, post_sections, post_brief, want_shut=False, description=""):
+    """Post-check rows per interface: config present + expected admin state. post_sections[i] is the
+    'show running-config | section ^interface X$' output for intfs[i]."""
+    rows = []
+    for i, intf in enumerate(intfs):
+        cfg = post_sections[i] if i < len(post_sections) else ""
+        present = (f"description {description}" in cfg) if description else bool((cfg or "").strip())
+        rows.append({"name": f"{intf}: config present", "ok": present,
+                     "detail": " | ".join(l.strip() for l in (cfg or "").splitlines() if l.strip()) or "interface not found"})
+        line = intf_line(post_brief, intf)
+        state_ok = ("administratively down" in line) if _truthy(want_shut) else bool(re.search(r"up +up *$", line))
+        rows.append({"name": f"{intf}: {'shutdown' if _truthy(want_shut) else 'up/up'}", "ok": state_ok,
+                     "detail": line or "not listed"})
+    return rows
 
 
 def sg_policy_violations(req, policy):
@@ -182,5 +226,6 @@ class FilterModule:
             "rules_html": rules_html, "rules_text": rules_text, "rules_list": rules_list, "intf_line": intf_line,
             "other_intfs": other_intfs, "sg_policy_violations": sg_policy_violations,
             "intf_findings": intf_findings, "diag_pairs": diag_pairs,
-            "default_gateway": default_gateway,
+            "default_gateway": default_gateway, "expand_interfaces": expand_interfaces,
+            "interface_checks": interface_checks,
         }

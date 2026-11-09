@@ -57,7 +57,10 @@
     - name: ServiceNow | post findings
       ansible.builtin.include_tasks: tasks/snow_update.yml
       vars:
-        automation_status: diagnosed
+        # high-severity finding -> keep the incident open for an engineer; otherwise ServiceNow resolves it
+        automation_status: >-
+          {{ 'action_required' if (analysis.findings | selectattr('severity', 'equalto', 'high') | list | length > 0)
+             else 'diagnosed' }}
         sev_color: {high: '#cf222e', medium: '#9a6700', info: '#0969da'}
         note_html: >-
           <h3 style="margin:0">{{ snow_number | default('') }} &mdash; Automated diagnostics</h3>

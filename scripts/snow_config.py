@@ -20,14 +20,16 @@ T = "/api/now/table"
 
 STATUS_CHOICES = [("queued", "Queued"), ("running", "Running"), ("success", "Success"),
                   ("failed", "Failed"), ("rejected", "Rejected by policy"),
-                  ("rolled_back", "Rolled back"), ("diagnosed", "Diagnosed")]
+                  ("rolled_back", "Rolled back"), ("diagnosed", "Diagnosed"),
+                  ("action_required", "Diagnosed - action required")]
 
 # (element, label, type, max_length, default, choices)
 COMMON = [
     ("u_automation_status", "Automation Status", "string", 40, "", STATUS_CHOICES),
     ("u_awx_job", "AWX Job", "url", 1024, "", None),
     ("u_device", "Device", "string", 100, E.get("CISCO_INVENTORY_NAME", "demo-iosxe"), None),
-    ("u_interface", "Interface", "string", 60, "", None),
+    # one interface, a range (Loopback200-209) or a list (Lo200,Lo201) for bulk changes
+    ("u_interface", "Interface", "string", 255, "", None),
 ]
 FIELDS = {
     "change_request": [
@@ -77,9 +79,12 @@ def ensure_field(table, element, label, itype, maxlen, default, choices):
         sn.post(f"{T}/sys_dictionary", payload)
         log(f"{table}.{element} created")
     else:
+        found = q("sys_dictionary", f"name={table}^element={element}", "sys_id,max_length")
         upd = {"default_value": default} if default else {}
+        if itype == "string" and int(found[0].get("max_length") or 0) < maxlen:
+            upd["max_length"] = str(maxlen)          # only ever widen a column
+            log(f"{table}.{element} widened to {maxlen}")
         if upd:
-            found = q("sys_dictionary", f"name={table}^element={element}", "sys_id")
             sn.patch(f"{T}/sys_dictionary/{found[0]['sys_id']}", upd)
     for seq, (val, lab) in enumerate(choices or []):
         upsert("sys_choice", f"name={table}^element={element}^value={val}^language=en",
@@ -192,6 +197,18 @@ def main():
             "condition": "!current.u_automation_type.nil()", "script": script,
             "description": "Launches the mapped AWX job template with ticket fields as extra_vars.",
         })
+    close_script = (ROOT / "snow" / "close_rule.js").read_text(encoding="utf-8")
+    check_rhino_safe(close_script, "snow/close_rule.js")
+    for table in FIELDS:
+        name = f"AWX Demo - close ({table})"
+        log(f"Business Rule: {name}")
+        upsert("sys_script", f"name={name}", {
+            "name": name, "collection": table, "when": "after", "action_insert": "false",
+            "action_update": "true", "active": "true", "advanced": "true", "order": "200",
+            "condition": "current.u_automation_status.changes() && !current.u_automation_type.nil()",
+            "script": close_script,
+            "description": "Closes/resolves the ticket when the AWX playbook writes its final automation status.",
+        })
     # Backend for the Virtual Agent topics (see README > "Virtual Agent")
     agent = (ROOT / "snow" / "agent_script_include.js").read_text(encoding="utf-8")
     check_rhino_safe(agent, "snow/agent_script_include.js")
@@ -201,6 +218,19 @@ def main():
         "client_callable": "false", "script": agent,
         "description": "Virtual Agent backend: creates demo incidents/changes (which launch AWX) and reads their status.",
     })
+    # Virtual Agent Designer topics (drafts: open each in the Designer and click Publish once)
+    import va_topics
+    for name, payload in va_topics.records():
+        try:
+            upsert("sys_cb_topic", f"name={name}", payload)
+            log(f"Virtual Agent topic: {name}")
+        except HttpError as e:
+            if e.code != 403:
+                raise
+            # Without the full Virtual Agent plugin, topic records are writable only by the internal 'maint' role
+            log("Virtual Agent topics skipped: activate the plugin 'Glide Virtual Agent' (com.glide.cs.chatbot) "
+                "and give the setup user the role virtual_agent_admin, then re-run setup")
+            break
     log("ServiceNow configured")
 
 

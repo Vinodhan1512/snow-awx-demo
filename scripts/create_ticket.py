@@ -24,14 +24,16 @@ if not os.environ.get("SN_INSTANCE"):          # allow running directly on Windo
     load_env()
 E = os.environ
 sn = Client(f"https://{E['SN_INSTANCE']}", user=E["SN_USERNAME"], password=E["SN_PASSWORD"])
-DONE = {"success", "failed", "rejected", "rolled_back", "diagnosed"}
+DONE = {"success", "failed", "rejected", "rolled_back", "diagnosed", "action_required"}
+PASSED = {"success", "diagnosed", "action_required", "rejected", "rolled_back"}   # the automation did its job
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("kind", choices=["diag", "cisco", "sg"])
     ap.add_argument("--device", default=E.get("CISCO_INVENTORY_NAME", "demo-iosxe"))
-    ap.add_argument("--interface", default="Loopback123")
+    ap.add_argument("--interface", default="Loopback123",
+                    help="one interface, a range (Loopback200-209) or a list (Lo200,Lo201) for cisco")
     ap.add_argument("--description", default="Configured via ServiceNow + AWX")
     ap.add_argument("--shutdown", action="store_true")
     ap.add_argument("--action", default="add", choices=["add", "remove"])
@@ -78,7 +80,11 @@ def main():
     else:
         print("Timed out waiting. Check the ticket's work notes and the AWX job.")
         sys.exit(1)
-    sys.exit(0 if status in ("success", "diagnosed", "rejected", "rolled_back") else 1)
+    time.sleep(3)   # the close Business Rule runs right after the status update
+    r = sn.get(f"/api/now/table/{table}/{sid}", params={"sysparm_fields": "state,close_code",
+                                                        "sysparm_display_value": "true"})["result"]
+    print(f"  ticket state: {r['state']}" + (f" ({r['close_code']})" if r.get("close_code") else ""))
+    sys.exit(0 if status in PASSED else 1)
 
 
 if __name__ == "__main__":

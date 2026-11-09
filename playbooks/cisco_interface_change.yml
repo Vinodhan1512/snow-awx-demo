@@ -2,16 +2,20 @@
 # Use case 1: ServiceNow Change -> AWX -> Cisco IOS-XE pre-check / change / post-check -> back to the same Change.
 # extra_vars from ServiceNow: snow_table, snow_sys_id, snow_number, target_device, interface,
 #                             int_description, int_shutdown
+# "interface" can be one interface or several in one change: Loopback200 | Loopback200-209 | Lo200,Lo201,Lo305
 
 - name: Cisco interface change | pre-check, apply, post-check
   hosts: "{{ target_device | default('demo-iosxe', true) }}"
   gather_facts: false
   vars:
-    intf: "{{ interface | default('Loopback123', true) }}"
+    intf_spec: "{{ interface | default('Loopback123', true) }}"
+    intf_list: "{{ intf_spec | expand_interfaces(max_interfaces) }}"
+    max_interfaces: 20
     protected_interfaces: [GigabitEthernet1]   # management uplink of the DevNet sandbox
-    check_commands:
-      - show ip interface brief
-      - "show running-config | section ^interface {{ intf }}$"
+    check_commands: >-
+      {{ ['show ip interface brief']
+         + (intf_list | map('regex_replace', '^', 'show running-config | section ^interface ')
+                      | map('regex_replace', '$', '$') | list) }}
     change_lines: >-
       {{ ([('description ' ~ int_description)] if (int_description | default('') | length) else [])
          + (['shutdown'] if (int_shutdown | default(false) | bool) else ['no shutdown']) }}
@@ -20,8 +24,10 @@
       block:
         - name: Guardrail | refuse changes on protected interfaces
           ansible.builtin.assert:
-            that: intf | lower not in (protected_interfaces | map('lower') | list)
-            fail_msg: "{{ intf }} is a protected management interface - change refused by policy"
+            that: (intf_list | map('lower') | list | intersect(protected_interfaces | map('lower') | list)) | length == 0
+            fail_msg: >-
+              {{ intf_list | map('lower') | list | intersect(protected_interfaces | map('lower') | list) | join(', ') }}
+              is a protected management interface - change refused by policy
             quiet: true
 
         - name: PRE-CHECK | capture state
@@ -29,10 +35,11 @@
             commands: "{{ check_commands }}"
           register: pre
 
-        - name: CHANGE | configure {{ intf }}
+        - name: CHANGE | configure {{ intf_spec }}
           cisco.ios.ios_config:
-            parents: "interface {{ intf }}"
+            parents: "interface {{ item }}"
             lines: "{{ change_lines }}"
+          loop: "{{ intf_list }}"
           register: change
 
         - name: Settle time before post-check
@@ -47,7 +54,8 @@
         - name: Mark device stage complete
           ansible.builtin.set_fact:
             cisco_ok: true
-            pushed_lines: "{{ change.commands | default(change_lines) }}"
+            intfs: "{{ intf_list }}"
+            pushed_lines: "{{ change.results | map(attribute='commands') | select('defined') | flatten }}"
       rescue:
         - name: Record failure for the report
           ansible.builtin.set_fact:
@@ -59,18 +67,20 @@
   gather_facts: false
   vars:
     dev: "{{ target_device | default('demo-iosxe', true) }}"
-    intf: "{{ interface | default('Loopback123', true) }}"
+    intf_spec: "{{ interface | default('Loopback123', true) }}"
     h: "{{ hostvars[dev] if dev in hostvars else {} }}"
+    intfs: "{{ h.intfs | default([intf_spec]) }}"
     pre_out: "{{ h.pre.stdout | default([]) if h.pre is defined else [] }}"
     post_out: "{{ h.post.stdout | default([]) if h.post is defined else [] }}"
     pre_brief: "{{ pre_out[0] | default('') }}"
-    pre_cfg: "{{ pre_out[1] | default('') }}"
     post_brief: "{{ post_out[0] | default('') }}"
-    post_cfg: "{{ post_out[1] | default('') }}"
+    pre_cfg: "{{ pre_out[1:] | join('\n') }}"
+    post_cfg: "{{ post_out[1:] | join('\n') }}"
     want_shut: "{{ int_shutdown | default(false) | bool }}"
     header: >-
       <h3 style="margin:0">{{ snow_number | default('') }} &mdash; Cisco interface change</h3>
-      Device <b>{{ dev }}</b> &middot; Interface <b>{{ intf }}</b> &middot;
+      Device <b>{{ dev }}</b> &middot; Interface{{ 's' if intfs | length > 1 else '' }} <b>{{ intf_spec }}</b>
+      {{ '(' ~ (intfs | length) ~ ' interfaces)' if intfs | length > 1 else '' }} &middot;
       AWX job #{{ tower_job_id | default(awx_job_id | default('n/a')) }}<br/><br/>
   tasks:
     - name: Report when the device stage did not run
@@ -90,20 +100,13 @@
 
     - name: Evaluate post-check validations
       ansible.builtin.set_fact:
-        checks:
-          - name: Change present in running-config
-            ok: >-
-              {{ (('description ' ~ int_description) in post_cfg) if (int_description | default('') | length)
-                 else (post_cfg | length > 0) }}
-            detail: "{{ (post_cfg | default('') | trim | replace('\n', ' | ')) or 'interface not found' }}"
-          - name: "Admin state is {{ 'shutdown' if want_shut else 'up/up' }}"
-            ok: >-
-              {{ ('administratively down' in (post_brief | intf_line(intf))) if want_shut
-                 else ((post_brief | intf_line(intf)) is search('up +up *$')) }}
-            detail: "{{ post_brief | intf_line(intf) or 'not listed' }}"
-          - name: No impact on other interfaces
-            ok: "{{ (pre_brief | other_intfs(intf)) == (post_brief | other_intfs(intf)) }}"
-            detail: "{{ 'all other interfaces unchanged' if (pre_brief | other_intfs(intf)) == (post_brief | other_intfs(intf)) else 'state changed on other interfaces - review diff' }}"
+        checks: >-
+          {{ (intfs | interface_checks(post_out[1:], post_brief, want_shut, int_description | default('')))
+             + [{'name': 'No impact on other interfaces',
+                 'ok': (pre_brief | other_intfs(intfs)) == (post_brief | other_intfs(intfs)),
+                 'detail': 'all other interfaces unchanged'
+                           if (pre_brief | other_intfs(intfs)) == (post_brief | other_intfs(intfs))
+                           else 'state changed on other interfaces - review diff'}] }}
 
     - name: Build comparison report
       ansible.builtin.set_fact:

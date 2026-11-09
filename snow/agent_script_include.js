@@ -29,7 +29,7 @@ AWXDemoAgent.prototype = {
         device = this._cleanDevice(device);
         intf = this._cleanIntf(intf, true);
         if (!intf) {
-            return { ok: false, message: 'Only loopback interfaces can be changed from chat. Example: Loopback200.' };
+            return { ok: false, message: 'Only loopback interfaces can be changed from chat. Examples: Loopback200, or Loopback200-209 for up to 20 at once.' };
         }
         description = String(description || '').replace(/[\r\n]+/g, ' ').substring(0, 80);
         var shut = String(shutdown) == 'true';
@@ -97,7 +97,14 @@ AWXDemoAgent.prototype = {
         intf = String(intf || '').replace(/\s+/g, '');
         var m = /^(lo|loopback)(\d{1,4})$/i.exec(intf);
         if (m) return 'Loopback' + m[2];
-        if (loopbackOnly) return '';
+        if (loopbackOnly) {
+            // bulk: a range of up to 20 loopbacks, e.g. Loopback200-209 or lo200-lo209
+            m = /^(lo|loopback)(\d{1,4})-(lo|loopback)?(\d{1,4})$/i.exec(intf);
+            if (m && parseInt(m[4], 10) >= parseInt(m[2], 10) && parseInt(m[4], 10) - parseInt(m[2], 10) < 20) {
+                return 'Loopback' + m[2] + '-' + m[4];
+            }
+            return '';
+        }
         m = /^(gi|gigabitethernet)(\d{1,2}(\/\d{1,2}){0,2})$/i.exec(intf);
         if (m) return 'GigabitEthernet' + m[2];
         return '';
