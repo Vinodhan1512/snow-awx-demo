@@ -84,6 +84,14 @@ if not logs:
 for l in logs:
     print(f"- {l.get('sys_created_on')} [{l.get('source')}] {str(l.get('message'))[:250]}")
 
+head("AWX Demo rule log (last 60 min)")
+trace = q("syslog", "sys_created_on>javascript:gs.minutesAgoStart(60)^messageLIKE[AWX Demo]^ORDERBYDESCsys_created_on",
+          "sys_created_on,level,message", 20)
+if not trace:
+    print("(none) -> the business rule did not run at all")
+for l in trace:
+    print(f"- {l.get('sys_created_on')} [{l.get('level')}] {str(l.get('message'))[:300]}")
+
 # ---- 5. AWX jobs ----
 head("Recent AWX jobs")
 try:

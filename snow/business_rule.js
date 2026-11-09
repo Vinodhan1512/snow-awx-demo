@@ -4,13 +4,17 @@
     var table = current.getTableName();
     var sysId = current.getUniqueValue();
     var type = current.getValue('u_automation_type');
+    gs.info('[AWX Demo] rule started for ' + current.getValue('number') + ' type=' + type);
     if (!type) return;
 
     function str(f) { var v = current.getValue(f); return v ? String(v) : ''; }
     function bool(f) { var v = String(current.getValue(f)); return v == '1' || v == 'true'; }
 
     var rec = new GlideRecord(table);
-    if (!rec.get(sysId)) return;
+    if (!rec.get(sysId)) {
+        gs.error('[AWX Demo] could not re-read ' + table + ' ' + sysId);
+        return;
+    }
 
     try {
         var awxUrl = String(gs.getProperty('awxdemo.awx_url', '')).replace(/\/+$/, '');
@@ -52,9 +56,11 @@
         r.setRequestHeader('Accept', 'application/json');
         r.setHttpTimeout(30000);
         r.setRequestBody(JSON.stringify({ extra_vars: vars }));
+        gs.info('[AWX Demo] calling AWX ' + awxUrl + ' template ' + tid);
         var resp = r.execute();
         var code = resp.getStatusCode();
         var body = resp.getBody() || '';
+        gs.info('[AWX Demo] AWX answered HTTP ' + code + ' ' + (resp.getErrorMessage() || '') + ' ' + body.substring(0, 200));
 
         if (code == 201) {
             var job = JSON.parse(body).job;
@@ -69,6 +75,7 @@
         }
         rec.update();
     } catch (e) {
+        gs.error('[AWX Demo] error: ' + e);
         rec.u_automation_status = 'failed';
         rec.work_notes = 'AWX launch error: ' + e;
         rec.update();
