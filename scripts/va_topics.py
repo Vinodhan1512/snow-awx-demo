@@ -160,11 +160,13 @@ def _status():
 
 TOPICS = [
     ("AWX Demo - Diagnose interface", "Diagnose a network interface",
-     "diagnose interface,interface down,network issue,diagnose network", _diagnose),
+     "awx diagnose,diagnose interface,interface down,network issue,diagnose network", _diagnose),
     ("AWX Demo - Change loopback", "Change a loopback interface",
-     "loopback,enable interface,shut down interface,change loopback", _change),
+     "awx loopback,loopback,enable interface,shut down interface,change loopback", _change),
     ("AWX Demo - Automation status", "Check automation status",
-     "check status,automation status,ticket status", _status),
+     "awx status,check status,automation status,ticket status", _status),
+    # NLU runs before keyword matching on this instance, so each topic also has an "awx ..." keyword that no NLU
+    # intent claims - type that in the chat to start the topic reliably.
 ]
 
 
