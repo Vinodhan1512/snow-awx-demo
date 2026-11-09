@@ -115,7 +115,13 @@ def sg_policy_violations(req, policy):
 
 
 def intf_findings(show_intf, intf):
-    """Very small rule engine over 'show interfaces <intf>' output."""
+    """Very small rule engine over 'show interfaces <intf>' output.
+    Returns {"findings": [{severity, text}], "state": str}. A dict, not a tuple: Ansible renders a tuple
+    returned by a filter into its string form, so indexing it in a template yields single characters."""
+    return dict(zip(("findings", "state"), _intf_findings(show_intf, intf)))
+
+
+def _intf_findings(show_intf, intf):
     t = show_intf or ""
     f = []
     m = re.search(r"is (administratively down|up|down), line protocol is (up|down)", t)
